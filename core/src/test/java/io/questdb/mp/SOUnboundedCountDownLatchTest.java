@@ -28,6 +28,7 @@ import io.questdb.log.Log;
 import io.questdb.log.LogFactory;
 import io.questdb.std.time.Dates;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.util.concurrent.BrokenBarrierException;
@@ -38,6 +39,7 @@ public class SOUnboundedCountDownLatchTest {
 
     private static final Log LOG = LogFactory.getLog(SOUnboundedCountDownLatchTest.class);
 
+    @Ignore
     @Test
     public void testUnboundedLatch() throws BrokenBarrierException, InterruptedException {
         SPSequence pubSeq = new SPSequence(64);

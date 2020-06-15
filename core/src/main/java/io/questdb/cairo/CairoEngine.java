@@ -35,11 +35,14 @@ import io.questdb.cairo.pool.PoolListener;
 import io.questdb.cairo.pool.ReaderPool;
 import io.questdb.cairo.pool.WriterPool;
 import io.questdb.cairo.sql.ReaderOutOfDateException;
+import io.questdb.griffin.model.CreateTableModel;
+import io.questdb.griffin.model.ExpressionNode;
 import io.questdb.log.Log;
 import io.questdb.log.LogFactory;
-import io.questdb.mp.SynchronizedJob;
+import io.questdb.mp.*;
 import io.questdb.std.Files;
 import io.questdb.std.FilesFacade;
+import io.questdb.std.LongObjHashMap;
 import io.questdb.std.Misc;
 import io.questdb.std.Transient;
 import io.questdb.std.microtime.MicrosecondClock;
@@ -52,7 +55,12 @@ public class CairoEngine implements Closeable {
     private final ReaderPool readerPool;
     private final CairoConfiguration configuration;
     private final WriterMaintenanceJob writerMaintenanceJob;
+    private final RingQueue<TelemetryRow> telemetryQueue;
+    private final MCSequence telemetrySubSeq;
+    private final LongObjHashMap<SPSequence> telemetryPublishers;
     private final MessageBus messageBus;
+
+    private TelemetryWriterJob telemetryWriterJob;
 
     public CairoEngine(CairoConfiguration configuration) {
         this(configuration, null);
@@ -63,6 +71,9 @@ public class CairoEngine implements Closeable {
         this.writerPool = new WriterPool(configuration, messageBus);
         this.readerPool = new ReaderPool(configuration);
         this.writerMaintenanceJob = new WriterMaintenanceJob(configuration);
+        this.telemetryQueue = new RingQueue<>(TelemetryRow::new, configuration.getTelemetryQueueCapacity());
+        this.telemetrySubSeq = new MCSequence(configuration.getTelemetryQueueCapacity());
+        this.telemetryPublishers = new LongObjHashMap<SPSequence>();
         this.messageBus = messageBus;
     }
 
@@ -72,6 +83,8 @@ public class CairoEngine implements Closeable {
 
     @Override
     public void close() {
+        storeTelemetry(TelemetryEvent.DOWN);
+        Misc.free(telemetryWriterJob);
         Misc.free(writerPool);
         Misc.free(readerPool);
     }
@@ -215,15 +228,15 @@ public class CairoEngine implements Closeable {
         return readerPool.releaseAll();
     }
 
-    public boolean releaseAllWriters () {
+    public boolean releaseAllWriters() {
         return writerPool.releaseAll();
     }
-    
-	public boolean releaseInactive() {
-		boolean useful = writerPool.releaseInactive();
-		useful |= readerPool.releaseInactive();
-		return useful;
-	}
+
+    public boolean releaseInactive() {
+        boolean useful = writerPool.releaseInactive();
+        useful |= readerPool.releaseInactive();
+        return useful;
+    }
 
     public void remove(
             CairoSecurityContext securityContext,
@@ -307,6 +320,106 @@ public class CairoEngine implements Closeable {
             int error = ff.errno();
             LOG.error().$("rename failed [from='").$(path).$("', to='").$(otherPath).$("', error=").$(error).$(']').$();
             throw CairoException.instance(error).put("Rename failed");
+        }
+    }
+
+    public final TelemetryWriterJob startTelemetry() {
+        this.telemetryWriterJob = new TelemetryWriterJob(configuration);
+        storeTelemetry(TelemetryEvent.UP);
+
+        return this.telemetryWriterJob;
+    }
+
+    public final void storeTelemetry(short event) {
+        long thread = Thread.currentThread().getId();
+        final int keyIndex = telemetryPublishers.keyIndex(thread);
+
+        if (keyIndex < 0) {
+            final SPSequence publisher = telemetryPublishers.valueAt(keyIndex);
+            publishTelemetry(event, publisher);
+        } else {
+            final SPSequence publisher = new SPSequence(configuration.getTelemetryQueueCapacity());
+            telemetryPublishers.putAt(keyIndex, thread, publisher);
+            publisher.then(telemetrySubSeq);
+            publishTelemetry(event, publisher);
+        }
+    }
+
+    private final void publishTelemetry(short event, SPSequence publisher) {
+        final MicrosecondClock clock = configuration.getMicrosecondClock();
+        final CharSequence id = "dummy-id";
+
+        long cursor = publisher.nextBully();
+        TelemetryRow row = telemetryQueue.get(cursor);
+        row.ts = clock.getTicks();
+        row.id = id;
+        row.event = event;
+        publisher.done(cursor);
+    }
+
+    private class TelemetryWriterJob extends SynchronizedJob implements Closeable {
+        private final CharSequence telemetryTableName = "telemetry";
+        private final TableWriter writer;
+
+        public TelemetryWriterJob(CairoConfiguration configuration) {
+            final FilesFacade ff = configuration.getFilesFacade();
+            final CharSequence root = configuration.getRoot();
+
+            try(Path path = new Path()) {
+                if (TableUtils.exists(ff, path, root, telemetryTableName, 0, telemetryTableName.length()) == TableUtils.TABLE_DOES_NOT_EXIST) {
+                    final CreateTableModel telemetry = CreateTableModel.FACTORY.newInstance();
+                    final ExpressionNode name = ExpressionNode.FACTORY.newInstance();
+                    final AppendMemory appendMem = new AppendMemory();
+
+                    name.of(ExpressionNode.OPERATION, telemetryTableName, 0, telemetryTableName.length());
+                    telemetry.setName(name);
+                    telemetry.addColumn("ts", ColumnType.TIMESTAMP, configuration.getDefaultSymbolCapacity());
+                    telemetry.addColumn("id", ColumnType.STRING, configuration.getDefaultSymbolCapacity());
+                    telemetry.addColumn("event", ColumnType.SHORT, configuration.getDefaultSymbolCapacity());
+
+                    TableUtils.createTable(
+                            ff,
+                            appendMem,
+                            path,
+                            root,
+                            telemetry,
+                            configuration.getMkDirMode()
+                    );
+                }
+            }
+
+            this.writer = new TableWriter(configuration, telemetryTableName);
+        }
+
+        @Override
+        protected boolean runSerially() {
+            long cursor = telemetrySubSeq.next();
+
+            while (cursor == -2) {
+                cursor = telemetrySubSeq.next();
+            }
+
+            if (cursor > -1) {
+                TelemetryRow telemetryRow = telemetryQueue.get(cursor);
+                final TableWriter.Row row = writer.newRow();
+
+                row.putDate(0, telemetryRow.ts);
+                row.putStr(1, telemetryRow.id);
+                row.putShort(2, telemetryRow.event);
+                row.append();
+
+                telemetrySubSeq.done(cursor);
+            }
+
+            writer.commit();
+
+            return true;
+        }
+
+        @Override
+        public void close() {
+            runSerially();
+            writer.close();
         }
     }
 

@@ -43,7 +43,7 @@ public class CreateTableModel implements Mutable, ExecutionModel, Sinkable, Tabl
     private ExpressionNode timestamp;
     private ExpressionNode partitionBy;
 
-    private CreateTableModel() {
+    public CreateTableModel() {
     }
 
     public boolean addColumn(CharSequence name, int type, int symbolCapacity) {

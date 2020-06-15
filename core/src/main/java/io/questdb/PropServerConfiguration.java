@@ -139,6 +139,8 @@ public class PropServerConfiguration implements ServerConfiguration {
     private final int doubleToStrCastScale;
     private final PropPGWireDispatcherConfiguration propPGWireDispatcherConfiguration = new PropPGWireDispatcherConfiguration();
     private final boolean pgEnabled;
+    private final boolean telemetryEnabled;
+    private final int telemetryQueueCapacity;
     private boolean httpAllowDeflateBeforeSend;
     private int[] httpWorkerAffinity;
     private int connectionPoolInitialCapacity;
@@ -219,7 +221,7 @@ public class PropServerConfiguration implements ServerConfiguration {
     private boolean pgDaemonPool;
 
     public PropServerConfiguration(String root, Properties properties) throws ServerConfigurationException, JsonException {
-        this.sharedWorkerCount = getInt(properties, "shared.worker.count", 2);
+        this.sharedWorkerCount = getInt(properties, "shared.worker.count", 3);
         this.sharedWorkerAffinity = getAffinity(properties, "shared.worker.affinity", sharedWorkerCount);
         this.sharedWorkerHaltOnError = getBoolean(properties, "shared.worker.haltOnError", false);
         this.httpServerEnabled = getBoolean(properties, "http.enabled", true);
@@ -400,6 +402,8 @@ public class PropServerConfiguration implements ServerConfiguration {
         this.floatToStrCastScale = getInt(properties, "cairo.sql.float.cast.scale", 4);
         this.sqlGroupByMapCapacity = getInt(properties, "cairo.sql.groupby.map.capacity", 1024);
         this.sqlGroupByPoolCapacity = getInt(properties, "cairo.sql.groupby.pool.capacity", 1024);
+        this.telemetryEnabled = getBoolean(properties, "cairo.telemetry.enabled", true);
+        this.telemetryQueueCapacity = getInt(properties, "cairo.telemetry.queue.capacity", 512);
         final String sqlCopyFormatsFile = getString(properties, "cairo.sql.copy.formats.file", "/text_loader.json");
 
         final String dateLocale = getString(properties, "cairo.date.locale", "en");
@@ -1213,6 +1217,16 @@ public class PropServerConfiguration implements ServerConfiguration {
         @Override
         public int getSqlSortValuePageSize() {
             return sqlSortValuePageSize;
+        }
+
+        @Override
+        public boolean getTelemetryEnabled() {
+            return telemetryEnabled;
+        }
+
+        @Override
+        public int getTelemetryQueueCapacity() {
+            return telemetryQueueCapacity;
         }
 
         @Override

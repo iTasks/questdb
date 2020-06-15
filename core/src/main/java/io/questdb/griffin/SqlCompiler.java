@@ -209,9 +209,16 @@ public class SqlCompiler implements Closeable {
 
         final KeywordBasedExecutor executor = keywordBasedExecutors.get(tok);
         if (executor == null) {
-            return compileUsingModel(executionContext);
+            final CompiledQuery cc = compileUsingModel(executionContext);
+            engine.storeTelemetry(cc.getType());
+
+            return cc;
         }
-        return executor.execute(executionContext);
+
+        final CompiledQuery cc = executor.execute(executionContext);
+        engine.storeTelemetry(cc.getType());
+
+        return cc;
     }
 
     public CairoEngine getEngine() {

@@ -91,7 +91,7 @@
                         <goals>
                             <goal>exec</goal>
                         </goals>
-                        <phase>generate-sources</phase>
+                        <phase>package</phase>
                         <configuration>
                             <executable>${nodejs.npm.cmd}</executable>
                             <arguments>
@@ -107,7 +107,7 @@
                         <goals>
                             <goal>exec</goal>
                         </goals>
-                        <phase>generate-sources</phase>
+                        <phase>package</phase>
                         <configuration>
                             <executable>${nodejs.npm.cmd}</executable>
                             <arguments>
@@ -128,11 +128,11 @@
                             <executable>${java.home}/bin/jlink</executable>
                             <arguments>
                                 <argument>--module-path</argument>
-                                <argument>${build.outputDirectory}</argument>
+                                <argument>${project.build.outputDirectory}</argument>
                                 <argument>--add-modules</argument>
                                 <argument>io.questdb</argument>
                                 <argument>--output</argument>
-                                <argument>${build.directory}/runtime</argument>
+                                <argument>${project.build.directory}/runtime</argument>
                                 <argument>--no-header-files</argument>
                                 <argument>--no-man-pages</argument>
                                 <argument>--compress=2</argument>
